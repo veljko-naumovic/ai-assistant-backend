@@ -1,19 +1,18 @@
-import express, { Request, Response } from "express";
-import cors from "cors";
 import dotenv from "dotenv";
-
 dotenv.config();
+import express from "express";
+import cors from "cors";
+import chatRouter from "./routes/chat";
 
 const app = express();
-const PORT = 5000;
 
 app.use(cors());
 app.use(express.json());
 
-app.get("/api/test", (req: Request, res: Response) => {
-	res.json({ message: "Backend works" });
-});
+app.use("/api/chat", chatRouter);
+
+const PORT = 5000;
 
 app.listen(PORT, () => {
-	console.log(`Server running on http://localhost:${PORT}`);
+	console.log(`Server running on port ${PORT}`);
 });
