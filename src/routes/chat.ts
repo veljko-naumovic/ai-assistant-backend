@@ -3,6 +3,7 @@ import OpenAI from "openai";
 import { createEmbedding } from "../utils/embeddings";
 import { cosineSimilarity } from "../utils/similarity";
 import { documents } from "../data/documents";
+
 const router = Router();
 
 const openai = new OpenAI({
@@ -16,7 +17,9 @@ type EmbeddedDoc = {
 };
 
 let embeddedDocs: EmbeddedDoc[] = [];
+let isReady = false;
 
+// INIT EMBEDDINGS
 const initEmbeddings = async () => {
 	embeddedDocs = await Promise.all(
 		documents.map(async (doc) => ({
@@ -24,61 +27,70 @@ const initEmbeddings = async () => {
 			embedding: await createEmbedding(doc.text),
 		})),
 	);
+	isReady = true;
+	console.log("✅ Embeddings ready");
 };
 
-// pokreni odmah
 initEmbeddings();
 
+// FIND RELEVANT DOCS
 const findRelevantDocs = (queryEmbedding: number[]) => {
 	return embeddedDocs
 		.map((doc) => ({
 			...doc,
 			score: cosineSimilarity(queryEmbedding, doc.embedding),
 		}))
+
 		.sort((a, b) => b.score - a.score)
-		.slice(0, 3);
+		.slice(0, 5);
 };
 
 router.post("/", async (req: Request, res: Response) => {
 	try {
 		const { message } = req.body as { message: string };
 
-		// 1. napravi embedding pitanja
+		// is embeddings ready
+		if (!isReady) {
+			return res.status(503).send("AI is warming up, try again...");
+		}
+
+		// embedding question
 		const queryEmbedding = await createEmbedding(message);
 
-		// 2. nađi relevantne dokumente
+		// relevant docs
 		const relevantDocs = findRelevantDocs(queryEmbedding);
 
 		const context = relevantDocs.map((d) => d.text).join("\n");
 
-		// 3. pošalji GPT-u sa contextom
-		const response = await openai.chat.completions.create({
+		// 3. STREAM GPT
+		const stream = await openai.chat.completions.create({
 			model: "gpt-4o-mini",
+			stream: true,
 			messages: [
 				{
 					role: "system",
 					content: `
-							You are a personal assistant for Veljko.
+						You are a personal assistant for Veljko.
 
-							Answer ONLY using the context below.
+						Answer ONLY using the context below.
 
-							RULES:
-							- If the question asks for more details (e.g. "tell me more", "more about him"):
-							→ expand using the available context.
-							→ provide additional details (projects, experience, technologies).
+						RULES:
+						- If the question asks for more details (e.g. "tell me more"):
+						→ expand using the context (projects, experience, technologies).
 
-							- If the answer is NOT in the context:
-							→ say you don't have that information.
+						- If the answer is NOT in the context:
+						→ say you don't have that specific information,
+						→ BUT mention what you DO know about Veljko (technologies, experience).
 
-							- Do NOT guess.
-							- Do NOT invent information.
+						- Do NOT guess.
+						- Do NOT invent information.
+						- Always include specific details (technologies, companies, projects).
 
-							- Be natural and conversational.
-							- Keep answers short but informative.
+						- Keep answers short and natural.
 
-							Context:
-							${context}
-							`,
+						Context:
+						${context}
+          			`,
 				},
 				{
 					role: "user",
@@ -87,14 +99,34 @@ router.post("/", async (req: Request, res: Response) => {
 			],
 		});
 
-		res.json({
-			answer: response.choices[0].message.content,
-		});
+		// STREAM HEADERS
+		res.setHeader("Content-Type", "text/plain; charset=utf-8");
+		res.setHeader("Transfer-Encoding", "chunked");
+		res.setHeader("Cache-Control", "no-cache");
+		res.setHeader("Connection", "keep-alive");
+
+		// STREAM RESPONSE
+		for await (const chunk of stream) {
+			const text = chunk.choices[0]?.delta?.content;
+
+			if (!text) continue;
+
+			res.write(text);
+
+			// optional flush (ako koristiš compression)
+			(res as any).flush?.();
+		}
+
+		res.end();
 	} catch (error) {
-		console.error(error);
-		res.status(500).json({
-			answer: "Something went wrong",
-		});
+		console.error("Stream error:", error);
+
+		try {
+			res.write("\nSomething went wrong.");
+			res.end();
+		} catch {
+			res.status(500).send("Something went wrong");
+		}
 	}
 });
 
