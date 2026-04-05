@@ -50,7 +50,19 @@ const findRelevantDocs = (queryEmbedding: number[]) => {
 
 router.post("/", async (req: Request, res: Response) => {
 	try {
-		const { message } = req.body as { message: string };
+		const { message, chatId } = req.body as {
+			message: string;
+			chatId: string;
+		};
+
+		await ChatModel.findByIdAndUpdate(chatId, {
+			$push: {
+				messages: {
+					role: "user",
+					content: message,
+				},
+			},
+		});
 
 		if (!isReady) {
 			return res.status(503).send("AI is warming up, try again...");
@@ -106,6 +118,15 @@ router.post("/", async (req: Request, res: Response) => {
 			res.write(text);
 			(res as any).flush?.();
 		}
+
+		await ChatModel.findByIdAndUpdate(chatId, {
+			$push: {
+				messages: {
+					role: "assistant",
+					content: fullText,
+				},
+			},
+		});
 
 		res.end();
 	} catch (error) {
@@ -209,6 +230,17 @@ router.post("/create", async (req, res) => {
 		res.json(chat);
 	} catch (err) {
 		res.status(500).json({ error: "Failed to create chat" });
+	}
+});
+
+// all chats
+
+router.get("/", async (req, res) => {
+	try {
+		const chats = await ChatModel.find().sort({ updatedAt: -1 });
+		res.json(chats);
+	} catch (err) {
+		res.status(500).json({ error: "Failed to fetch chats" });
 	}
 });
 
