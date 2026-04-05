@@ -289,4 +289,20 @@ router.delete("/:id", async (req, res) => {
 	}
 });
 
+router.patch("/pin", async (req, res) => {
+	try {
+		const { chatId, pinned } = req.body;
+
+		const updated = await ChatModel.findByIdAndUpdate(
+			chatId,
+			{ pinned },
+			{ new: true },
+		);
+
+		res.json(updated);
+	} catch (err) {
+		res.status(500).json({ error: "Failed to update pin" });
+	}
+});
+
 export default router;
