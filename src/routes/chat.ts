@@ -4,6 +4,7 @@ import { createEmbedding } from "../utils/embeddings";
 import { cosineSimilarity } from "../utils/similarity";
 import { documents } from "../data/documents";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
+import { ChatModel } from "../models/Chat";
 
 const router = Router();
 
@@ -189,6 +190,25 @@ router.post("/suggestions", async (req: Request, res: Response) => {
 	} catch (error) {
 		console.error("Suggestions error:", error);
 		res.json({ suggestions: [] });
+	}
+});
+
+// create chat
+
+router.post("/create", async (req, res) => {
+	try {
+		const chat = await ChatModel.create({
+			messages: [
+				{
+					role: "assistant",
+					content: "Hi! I'm Veljko's AI assistant 🚀",
+				},
+			],
+		});
+
+		res.json(chat);
+	} catch (err) {
+		res.status(500).json({ error: "Failed to create chat" });
 	}
 });
 
