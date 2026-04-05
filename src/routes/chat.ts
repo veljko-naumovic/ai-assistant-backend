@@ -45,9 +45,8 @@ const findRelevantDocs = (queryEmbedding: number[]) => {
 		.slice(0, 5);
 };
 
-//
-// 🧠 CHAT (STREAM)
-//
+// CHAT (STREAM)
+
 router.post("/", async (req: Request, res: Response) => {
 	try {
 		const { message } = req.body as { message: string };
@@ -120,9 +119,8 @@ router.post("/", async (req: Request, res: Response) => {
 	}
 });
 
-//
-// 💡 SUGGESTIONS
-//
+// SUGGESTIONS
+
 router.post("/suggestions", async (req: Request, res: Response) => {
 	try {
 		const { message, answer } = req.body as {
