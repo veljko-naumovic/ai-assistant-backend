@@ -277,4 +277,16 @@ router.patch("/rename", async (req, res) => {
 	}
 });
 
+router.delete("/:id", async (req, res) => {
+	try {
+		const { id } = req.params;
+
+		await ChatModel.findByIdAndDelete(id);
+
+		res.json({ success: true });
+	} catch (err) {
+		res.status(500).json({ error: "Failed to delete chat" });
+	}
+});
+
 export default router;
