@@ -133,4 +133,60 @@ router.post("/", async (req: Request, res: Response) => {
 	}
 });
 
+router.post("/suggestions", async (req: Request, res: Response) => {
+	try {
+		const { message } = req.body as { message: string };
+
+		if (!isReady) {
+			return res.status(503).json({ suggestions: [] });
+		}
+
+		// embedding question (isto kao chat)
+		const queryEmbedding = await createEmbedding(message);
+
+		const relevantDocs = findRelevantDocs(queryEmbedding);
+		const context = relevantDocs.map((d) => d.text).join("\n");
+
+		const completion = await openai.chat.completions.create({
+			model: "gpt-4o-mini",
+			messages: [
+				{
+					role: "system",
+					content: `
+							You generate follow-up questions for a chat.
+
+							Return ONLY 3 short questions.
+
+							Rules:
+							- max 8 words
+							- no numbering
+							- no explanation
+							- plain text only
+
+							Context:
+							${context}
+					`,
+				},
+				{
+					role: "user",
+					content: message,
+				},
+			],
+		});
+
+		const raw = completion.choices[0].message.content || "";
+
+		const suggestions = raw
+			.split("\n")
+			.map((s) => s.trim())
+			.filter(Boolean)
+			.slice(0, 3);
+
+		res.json({ suggestions });
+	} catch (error) {
+		console.error("Suggestions error:", error);
+		res.json({ suggestions: [] });
+	}
+});
+
 export default router;
