@@ -259,4 +259,22 @@ router.get("/", async (req, res) => {
 	}
 });
 
+// rename
+
+router.patch("/rename", async (req, res) => {
+	try {
+		const { chatId, title } = req.body;
+
+		const updated = await ChatModel.findByIdAndUpdate(
+			chatId,
+			{ title },
+			{ new: true },
+		);
+
+		res.json(updated);
+	} catch (err) {
+		res.status(500).json({ error: "Failed to rename chat" });
+	}
+});
+
 export default router;
