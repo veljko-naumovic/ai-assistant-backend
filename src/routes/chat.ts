@@ -30,7 +30,7 @@ const initEmbeddings = async () => {
 		})),
 	);
 	isReady = true;
-	console.log("✅ Embeddings ready");
+	console.log("Embeddings ready");
 };
 
 initEmbeddings();
@@ -55,6 +55,7 @@ router.post("/", async (req: Request, res: Response) => {
 			chatId: string;
 		};
 
+		// Save USER message
 		await ChatModel.findByIdAndUpdate(chatId, {
 			$push: {
 				messages: {
@@ -68,6 +69,16 @@ router.post("/", async (req: Request, res: Response) => {
 			return res.status(503).send("AI is warming up, try again...");
 		}
 
+		// GET HISTORY (LAST 8)
+		const chat = await ChatModel.findById(chatId);
+
+		const history: ChatCompletionMessageParam[] =
+			chat?.messages?.slice(-8).map((m) => ({
+				role: m.role as "user" | "assistant",
+				content: m.content,
+			})) || [];
+
+		// RAG
 		const queryEmbedding = await createEmbedding(message);
 		const relevantDocs = findRelevantDocs(queryEmbedding);
 		const context = relevantDocs.map((d) => d.text).join("\n");
@@ -77,25 +88,28 @@ router.post("/", async (req: Request, res: Response) => {
 			stream: true,
 			messages: [
 				{
-					role: "system" as const,
+					role: "system",
 					content: `
-						You are a personal assistant for Veljko.
+								You are a personal assistant for Veljko.
 
-						Answer ONLY using the context below.
+								Use previous messages to maintain conversation context.
 
-						RULES:
-						- Format answers using Markdown
-						- Use bullet points
-						- Use **bold**
-						- Do NOT invent information
-						- Keep answers short and natural
+								Answer ONLY using the context below.
 
-						Context:
-						${context}
-					`,
+								RULES:
+								- Format answers using Markdown
+								- Use bullet points
+								- Use **bold**
+								- Do NOT invent information
+								- Keep answers short and natural
+
+								Context:
+								${context}
+							`,
 				},
+				...history, //  MEMORY
 				{
-					role: "user" as const,
+					role: "user",
 					content: message,
 				},
 			],
@@ -119,6 +133,7 @@ router.post("/", async (req: Request, res: Response) => {
 			(res as any).flush?.();
 		}
 
+		// Save AI response
 		await ChatModel.findByIdAndUpdate(chatId, {
 			$push: {
 				messages: {
@@ -160,36 +175,36 @@ router.post("/suggestions", async (req: Request, res: Response) => {
 
 		const messages: ChatCompletionMessageParam[] = [
 			{
-				role: "system" as const,
+				role: "system",
 				content: `
-					You generate follow-up questions for a chat.
+							You generate follow-up questions for a chat.
 
-					Return ONLY 3 short questions.
+							Return ONLY 3 short questions.
 
-					Rules:
-					- max 8 words
-					- no numbering
-					- no explanation
-					- plain text only
+							Rules:
+							- max 8 words
+							- no numbering
+							- no explanation
+							- plain text only
 
-					If topic is:
-					- frontend → suggest React, performance, UI
-					- experience → suggest projects, challenges
-					- general → suggest skills, tools
+							If topic is:
+							- frontend → suggest React, performance, UI
+							- experience → suggest projects, challenges
+							- general → suggest skills, tools
 
-					Context:
-					${context}
-				`,
+							Context:
+							${context}
+						`,
 			},
 			{
-				role: "user" as const,
+				role: "user",
 				content: message,
 			},
 		];
 
 		if (answer) {
 			messages.push({
-				role: "assistant" as const,
+				role: "assistant",
 				content: answer,
 			});
 		}
