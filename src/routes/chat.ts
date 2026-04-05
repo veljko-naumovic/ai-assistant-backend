@@ -3,6 +3,7 @@ import OpenAI from "openai";
 import { createEmbedding } from "../utils/embeddings";
 import { cosineSimilarity } from "../utils/similarity";
 import { documents } from "../data/documents";
+import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 
 const router = Router();
 
@@ -40,83 +41,69 @@ const findRelevantDocs = (queryEmbedding: number[]) => {
 			...doc,
 			score: cosineSimilarity(queryEmbedding, doc.embedding),
 		}))
-
 		.sort((a, b) => b.score - a.score)
 		.slice(0, 5);
 };
 
+//
+// 🧠 CHAT (STREAM)
+//
 router.post("/", async (req: Request, res: Response) => {
 	try {
 		const { message } = req.body as { message: string };
 
-		// is embeddings ready
 		if (!isReady) {
 			return res.status(503).send("AI is warming up, try again...");
 		}
 
-		// embedding question
 		const queryEmbedding = await createEmbedding(message);
-
-		// relevant docs
 		const relevantDocs = findRelevantDocs(queryEmbedding);
-
 		const context = relevantDocs.map((d) => d.text).join("\n");
 
-		// 3. STREAM GPT
 		const stream = await openai.chat.completions.create({
 			model: "gpt-4o-mini",
 			stream: true,
 			messages: [
 				{
-					role: "system",
+					role: "system" as const,
 					content: `
-							You are a personal assistant for Veljko.
+						You are a personal assistant for Veljko.
 
-							Answer ONLY using the context below.
+						Answer ONLY using the context below.
 
-							RULES:
-							- Format answers using Markdown.
-							- Use bullet points when listing technologies.
-							- Use **bold** for important technologies.
+						RULES:
+						- Format answers using Markdown
+						- Use bullet points
+						- Use **bold**
+						- Do NOT invent information
+						- Keep answers short and natural
 
-							- If the question asks for more details:
-							→ expand using the context (projects, experience, technologies).
-
-							- If the answer is NOT in the context:
-							→ say you don't have that specific information,
-							→ BUT mention what you DO know about Veljko.
-
-							- Do NOT guess.
-							- Do NOT invent information.
-
-							- Keep answers short and natural.
-
-							Context:
-							${context}
-							`,
+						Context:
+						${context}
+					`,
 				},
 				{
-					role: "user",
+					role: "user" as const,
 					content: message,
 				},
 			],
 		});
 
-		// STREAM HEADERS
+		// HEADERS
 		res.setHeader("Content-Type", "text/plain; charset=utf-8");
 		res.setHeader("Transfer-Encoding", "chunked");
 		res.setHeader("Cache-Control", "no-cache");
 		res.setHeader("Connection", "keep-alive");
 
-		// STREAM RESPONSE
+		let fullText = "";
+
 		for await (const chunk of stream) {
 			const text = chunk.choices[0]?.delta?.content;
 
 			if (!text) continue;
 
+			fullText += text;
 			res.write(text);
-
-			// optional flush (ako koristiš compression)
 			(res as any).flush?.();
 		}
 
@@ -133,45 +120,63 @@ router.post("/", async (req: Request, res: Response) => {
 	}
 });
 
+//
+// 💡 SUGGESTIONS
+//
 router.post("/suggestions", async (req: Request, res: Response) => {
 	try {
-		const { message } = req.body as { message: string };
+		const { message, answer } = req.body as {
+			message: string;
+			answer?: string;
+		};
 
 		if (!isReady) {
 			return res.status(503).json({ suggestions: [] });
 		}
 
-		// embedding question (isto kao chat)
 		const queryEmbedding = await createEmbedding(message);
-
 		const relevantDocs = findRelevantDocs(queryEmbedding);
 		const context = relevantDocs.map((d) => d.text).join("\n");
 
+		const messages: ChatCompletionMessageParam[] = [
+			{
+				role: "system" as const,
+				content: `
+					You generate follow-up questions for a chat.
+
+					Return ONLY 3 short questions.
+
+					Rules:
+					- max 8 words
+					- no numbering
+					- no explanation
+					- plain text only
+
+					If topic is:
+					- frontend → suggest React, performance, UI
+					- experience → suggest projects, challenges
+					- general → suggest skills, tools
+
+					Context:
+					${context}
+				`,
+			},
+			{
+				role: "user" as const,
+				content: message,
+			},
+		];
+
+		if (answer) {
+			messages.push({
+				role: "assistant" as const,
+				content: answer,
+			});
+		}
+
 		const completion = await openai.chat.completions.create({
 			model: "gpt-4o-mini",
-			messages: [
-				{
-					role: "system",
-					content: `
-							You generate follow-up questions for a chat.
-
-							Return ONLY 3 short questions.
-
-							Rules:
-							- max 8 words
-							- no numbering
-							- no explanation
-							- plain text only
-
-							Context:
-							${context}
-					`,
-				},
-				{
-					role: "user",
-					content: message,
-				},
-			],
+			messages,
 		});
 
 		const raw = completion.choices[0].message.content || "";
