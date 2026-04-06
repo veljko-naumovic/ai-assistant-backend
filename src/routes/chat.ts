@@ -12,38 +12,8 @@ const openai = new OpenAI({
 	apiKey: process.env.OPENAI_API_KEY,
 });
 
-type EmbeddedDoc = {
-	id: string;
-	text: string;
-	embedding: number[];
-};
+// 🔍 FIND RELEVANT DOCS
 
-// INIT EMBEDDINGS
-const upsertDocuments = async () => {
-	const vectors = await Promise.all(
-		documents.map(async (doc) => {
-			const embedding = await createEmbedding(doc.text);
-
-			return {
-				id: doc.id,
-				values: embedding,
-				metadata: {
-					text: doc.text,
-				},
-			};
-		}),
-	);
-
-	await index.upsert({
-		records: vectors,
-	});
-
-	console.log("✅ Pinecone upsert done");
-};
-
-// upsertDocuments();
-
-// FIND RELEVANT DOCS
 const findRelevantDocs = async (queryEmbedding: number[]) => {
 	const result = await index.query({
 		vector: queryEmbedding,
@@ -51,11 +21,34 @@ const findRelevantDocs = async (queryEmbedding: number[]) => {
 		includeMetadata: true,
 	});
 
-	return (result.matches || []).map((match) => ({
-		text: match.metadata?.text || "",
-	}));
+	return (result.matches || [])
+		.filter((m) => m.score && m.score > 0.7)
+		.map((match) => ({
+			text: String(match.metadata?.text || ""),
+			type: String(match.metadata?.type || "general"),
+		}));
 };
-// CHAT (STREAM)
+
+// 🧠 BUILD CONTEXT (reusable)
+
+const buildContext = (relevantDocs: { text: string; type: string }[]) => {
+	const grouped = relevantDocs.reduce(
+		(acc, doc) => {
+			if (!acc[doc.type]) acc[doc.type] = [];
+			acc[doc.type].push(doc.text);
+			return acc;
+		},
+		{} as Record<string, string[]>,
+	);
+
+	return Object.entries(grouped)
+		.map(([type, texts]) => {
+			return `${type.toUpperCase()}:\n${texts.join("\n")}`;
+		})
+		.join("\n\n");
+};
+
+// 💬 CHAT (STREAM)
 
 router.post("/", async (req: Request, res: Response) => {
 	try {
@@ -74,7 +67,7 @@ router.post("/", async (req: Request, res: Response) => {
 			},
 		});
 
-		// GET HISTORY (LAST 8)
+		// GET HISTORY
 		const chat = await ChatModel.findById(chatId);
 
 		const history: ChatCompletionMessageParam[] =
@@ -83,10 +76,10 @@ router.post("/", async (req: Request, res: Response) => {
 				content: m.content,
 			})) || [];
 
-		// RAG
+		// 🔍 RAG
 		const queryEmbedding = await createEmbedding(message);
 		const relevantDocs = await findRelevantDocs(queryEmbedding);
-		const context = relevantDocs.map((d) => d.text).join("\n");
+		const context = buildContext(relevantDocs);
 
 		const stream = await openai.chat.completions.create({
 			model: "gpt-4o-mini",
@@ -95,24 +88,29 @@ router.post("/", async (req: Request, res: Response) => {
 				{
 					role: "system",
 					content: `
-								You are a personal assistant for Veljko.
+You are a personal assistant for Veljko.
 
-								Use previous messages to maintain conversation context.
+Use previous messages to maintain conversation context.
 
-								Answer ONLY using the context below.
+Use the structured context sections below:
+- EXPERIENCE
+- PROJECTS
+- SKILLS
+- FULLSTACK
 
-								RULES:
-								- Format answers using Markdown
-								- Use bullet points
-								- Use **bold**
-								- Do NOT invent information
-								- Keep answers short and natural
+Answer ONLY using the context.
 
-								Context:
-								${context}
-							`,
+RULES:
+- Use bullet points
+- Use **bold**
+- Be concise
+- Do NOT invent information
+
+Context:
+${context}
+					`,
 				},
-				...history, //  MEMORY
+				...history,
 				{
 					role: "user",
 					content: message,
@@ -120,22 +118,17 @@ router.post("/", async (req: Request, res: Response) => {
 			],
 		});
 
-		// HEADERS
 		res.setHeader("Content-Type", "text/plain; charset=utf-8");
 		res.setHeader("Transfer-Encoding", "chunked");
-		res.setHeader("Cache-Control", "no-cache");
-		res.setHeader("Connection", "keep-alive");
 
 		let fullText = "";
 
 		for await (const chunk of stream) {
 			const text = chunk.choices[0]?.delta?.content;
-
 			if (!text) continue;
 
 			fullText += text;
 			res.write(text);
-			(res as any).flush?.();
 		}
 
 		// Save AI response
@@ -151,17 +144,11 @@ router.post("/", async (req: Request, res: Response) => {
 		res.end();
 	} catch (error) {
 		console.error("Stream error:", error);
-
-		try {
-			res.write("\nSomething went wrong.");
-			res.end();
-		} catch {
-			res.status(500).send("Something went wrong");
-		}
+		res.status(500).send("Something went wrong");
 	}
 });
 
-// SUGGESTIONS
+// 💡 SUGGESTIONS
 
 router.post("/suggestions", async (req: Request, res: Response) => {
 	try {
@@ -172,30 +159,22 @@ router.post("/suggestions", async (req: Request, res: Response) => {
 
 		const queryEmbedding = await createEmbedding(message);
 		const relevantDocs = await findRelevantDocs(queryEmbedding);
-		const context = relevantDocs.map((d) => d.text).join("\n");
+		const context = buildContext(relevantDocs);
 
 		const messages: ChatCompletionMessageParam[] = [
 			{
 				role: "system",
 				content: `
-							You generate follow-up questions for a chat.
+					Generate 3 short follow-up questions.
 
-							Return ONLY 3 short questions.
+					Rules:
+					- max 8 words
+					- no numbering
+					- plain text
 
-							Rules:
-							- max 8 words
-							- no numbering
-							- no explanation
-							- plain text only
-
-							If topic is:
-							- frontend → suggest React, performance, UI
-							- experience → suggest projects, challenges
-							- general → suggest skills, tools
-
-							Context:
-							${context}
-						`,
+					Context:
+					${context}
+				`,
 			},
 			{
 				role: "user",
@@ -230,80 +209,60 @@ router.post("/suggestions", async (req: Request, res: Response) => {
 	}
 });
 
-// create chat
+// ➕ CREATE
 
 router.post("/create", async (req, res) => {
-	try {
-		const chat = await ChatModel.create({
-			messages: [
-				{
-					role: "assistant",
-					content: "Hi! I'm Veljko's AI assistant 🚀",
-				},
-			],
-		});
-
-		res.json(chat);
-	} catch (err) {
-		res.status(500).json({ error: "Failed to create chat" });
-	}
+	const chat = await ChatModel.create({
+		messages: [
+			{
+				role: "assistant",
+				content: "Hi! I'm Veljko's AI assistant 🚀",
+			},
+		],
+	});
+	res.json(chat);
 });
 
-// all chats
+// 📥 GET
 
 router.get("/", async (req, res) => {
-	try {
-		const chats = await ChatModel.find().sort({ updatedAt: -1 });
-		res.json(chats);
-	} catch (err) {
-		res.status(500).json({ error: "Failed to fetch chats" });
-	}
+	const chats = await ChatModel.find().sort({ updatedAt: -1 });
+	res.json(chats);
 });
 
-// rename
+// ✏️ RENAME
 
 router.patch("/rename", async (req, res) => {
-	try {
-		const { chatId, title } = req.body;
+	const { chatId, title } = req.body;
 
-		const updated = await ChatModel.findByIdAndUpdate(
-			chatId,
-			{ title },
-			{ returnDocument: "after" },
-		);
+	const updated = await ChatModel.findByIdAndUpdate(
+		chatId,
+		{ title },
+		{ returnDocument: "after" },
+	);
 
-		res.json(updated);
-	} catch (err) {
-		res.status(500).json({ error: "Failed to rename chat" });
-	}
+	res.json(updated);
 });
+
+// ❌ DELETE
 
 router.delete("/:id", async (req, res) => {
-	try {
-		const { id } = req.params;
-
-		await ChatModel.findByIdAndDelete(id);
-
-		res.json({ success: true });
-	} catch (err) {
-		res.status(500).json({ error: "Failed to delete chat" });
-	}
+	await ChatModel.findByIdAndDelete(req.params.id);
+	res.json({ success: true });
 });
 
+// 📌 PIN
+
 router.patch("/pin", async (req, res) => {
-	try {
-		const { chatId, pinned } = req.body;
+	const { chatId, pinned } = req.body;
 
-		const updated = await ChatModel.findByIdAndUpdate(
-			chatId,
-			{ pinned },
-			{ returnDocument: "after" },
-		);
+	const updated = await ChatModel.findByIdAndUpdate(
+		chatId,
+		{ pinned },
+		{ returnDocument: "after" },
+	);
 
-		res.json(updated);
-	} catch (err) {
-		res.status(500).json({ error: "Failed to update pin" });
-	}
+	res.json(updated);
 });
 
 export default router;

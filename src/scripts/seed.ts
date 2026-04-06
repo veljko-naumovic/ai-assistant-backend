@@ -17,6 +17,7 @@ const seed = async () => {
 				values: embedding,
 				metadata: {
 					text: doc.text,
+					type: doc.type,
 				},
 			};
 		}),
