@@ -1,10 +1,10 @@
 import { Router, Request, Response } from "express";
 import OpenAI from "openai";
 import { createEmbedding } from "../utils/embeddings";
-import { cosineSimilarity } from "../utils/similarity";
 import { documents } from "../data/documents";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { ChatModel } from "../models/Chat";
+import { index } from "../config/pinecone";
 
 const router = Router();
 
@@ -18,34 +18,43 @@ type EmbeddedDoc = {
 	embedding: number[];
 };
 
-let embeddedDocs: EmbeddedDoc[] = [];
-let isReady = false;
-
 // INIT EMBEDDINGS
-const initEmbeddings = async () => {
-	embeddedDocs = await Promise.all(
-		documents.map(async (doc) => ({
-			...doc,
-			embedding: await createEmbedding(doc.text),
-		})),
+const upsertDocuments = async () => {
+	const vectors = await Promise.all(
+		documents.map(async (doc) => {
+			const embedding = await createEmbedding(doc.text);
+
+			return {
+				id: doc.id,
+				values: embedding,
+				metadata: {
+					text: doc.text,
+				},
+			};
+		}),
 	);
-	isReady = true;
-	console.log("Embeddings ready");
+
+	await index.upsert({
+		records: vectors,
+	});
+
+	console.log("✅ Pinecone upsert done");
 };
 
-initEmbeddings();
+// upsertDocuments();
 
 // FIND RELEVANT DOCS
-const findRelevantDocs = (queryEmbedding: number[]) => {
-	return embeddedDocs
-		.map((doc) => ({
-			...doc,
-			score: cosineSimilarity(queryEmbedding, doc.embedding),
-		}))
-		.sort((a, b) => b.score - a.score)
-		.slice(0, 5);
-};
+const findRelevantDocs = async (queryEmbedding: number[]) => {
+	const result = await index.query({
+		vector: queryEmbedding,
+		topK: 5,
+		includeMetadata: true,
+	});
 
+	return (result.matches || []).map((match) => ({
+		text: match.metadata?.text || "",
+	}));
+};
 // CHAT (STREAM)
 
 router.post("/", async (req: Request, res: Response) => {
@@ -65,10 +74,6 @@ router.post("/", async (req: Request, res: Response) => {
 			},
 		});
 
-		if (!isReady) {
-			return res.status(503).send("AI is warming up, try again...");
-		}
-
 		// GET HISTORY (LAST 8)
 		const chat = await ChatModel.findById(chatId);
 
@@ -80,7 +85,7 @@ router.post("/", async (req: Request, res: Response) => {
 
 		// RAG
 		const queryEmbedding = await createEmbedding(message);
-		const relevantDocs = findRelevantDocs(queryEmbedding);
+		const relevantDocs = await findRelevantDocs(queryEmbedding);
 		const context = relevantDocs.map((d) => d.text).join("\n");
 
 		const stream = await openai.chat.completions.create({
@@ -165,12 +170,8 @@ router.post("/suggestions", async (req: Request, res: Response) => {
 			answer?: string;
 		};
 
-		if (!isReady) {
-			return res.status(503).json({ suggestions: [] });
-		}
-
 		const queryEmbedding = await createEmbedding(message);
-		const relevantDocs = findRelevantDocs(queryEmbedding);
+		const relevantDocs = await findRelevantDocs(queryEmbedding);
 		const context = relevantDocs.map((d) => d.text).join("\n");
 
 		const messages: ChatCompletionMessageParam[] = [
@@ -268,7 +269,7 @@ router.patch("/rename", async (req, res) => {
 		const updated = await ChatModel.findByIdAndUpdate(
 			chatId,
 			{ title },
-			{ new: true },
+			{ returnDocument: "after" },
 		);
 
 		res.json(updated);
@@ -296,7 +297,7 @@ router.patch("/pin", async (req, res) => {
 		const updated = await ChatModel.findByIdAndUpdate(
 			chatId,
 			{ pinned },
-			{ new: true },
+			{ returnDocument: "after" },
 		);
 
 		res.json(updated);
