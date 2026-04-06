@@ -1,25 +1,27 @@
 export const rawData = `
-Veljko Naumovic is a frontend developer specializing in React and modern JavaScript technologies, including JavaScript and TypeScript.
+Veljko Naumovic is a frontend developer specializing in React, JavaScript, and TypeScript.
 
-He has been working as a Frontend Developer at Eponuda since 2021, where he develops and maintains the frontend of an internal data management platform using React. His work focuses on building scalable, high-performance, and maintainable web applications.
+He has been working as a Frontend Developer at Eponuda since 2021. At Eponuda, he develops and maintains the frontend of an internal data management platform using React. His work focuses on building scalable, high-performance, and maintainable web applications.
 
-At Eponuda, he has contributed to multiple production projects, including the main price comparison website in Serbia and platforms across the Adria region.
+He has contributed to multiple production-level projects, including a large price comparison platform used across Serbia and the Adria region. This platform handles complex product data, filtering systems, and performance optimization for large datasets.
 
-Veljko has strong practical experience with JavaScript and TypeScript. Since React and Next.js are JavaScript-based technologies, he has deep expertise in the JavaScript ecosystem.
+Veljko has strong expertise in the JavaScript ecosystem, especially in React and modern frontend development practices.
 
-He uses modern frontend tools and libraries such as Ant Design, SCSS, Tailwind, Material UI, Redux Toolkit, and Bootstrap.
+His tech stack includes:
+- React
+- TypeScript and JavaScript
+- Next.js
+- Ant Design, Material UI, Tailwind, Bootstrap
+- SCSS
+- Redux Toolkit
 
-Veljko is primarily a React developer, and most of his professional work is based on React.
+He has experience working with real-world applications, focusing on performance, scalability, and clean architecture.
 
-He also has full-stack experience. As a freelance developer, he built a full-stack web application for Gorenje Servis & Delovi using React, TypeScript, Node.js, and Firebase, delivering a complete production-ready solution.
+In addition to frontend development, Veljko has full-stack experience. As a freelance developer, he built a complete web application for Gorenje Servis & Delovi using React, TypeScript, Node.js, and Firebase. This project included both frontend and backend development and was delivered as a production-ready solution.
 
-Veljko has also explored Vue.js through smaller personal projects, but his main professional experience is focused on React.
+He has also explored Vue.js through personal projects, but his primary professional focus is React.
 
-Veljko has worked on several production-level projects. At Eponuda, he contributed to the development of a large price comparison platform used across Serbia and the Adria region.
+Veljko focuses on practical development, solving real-world problems, and continuously improving his skills by working on production systems and modern technologies.
 
-He also built a full-stack application for Gorenje Servis & Delovi using React, TypeScript, Node.js, and Firebase for internal business needs.
-
-He focuses on frontend development and does not have professional experience working with backend languages like Java.
-
-His work is focused on practical development, real-world applications, and scalable frontend architecture.
+He is interested in AI-powered applications, modern web technologies, and building scalable software systems.
 `;
