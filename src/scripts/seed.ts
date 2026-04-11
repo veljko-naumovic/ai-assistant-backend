@@ -9,11 +9,11 @@ const seed = async () => {
 	await index.deleteAll(); // first delete than feed with data
 
 	const vectors = await Promise.all(
-		documents.map(async (doc) => {
+		documents.map(async (doc, i) => {
 			const embedding = await createEmbedding(doc.text);
 
 			return {
-				id: doc.id,
+				id: `${doc.type}-${i}`,
 				values: embedding,
 				metadata: {
 					text: doc.text,

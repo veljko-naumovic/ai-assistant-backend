@@ -11,7 +11,7 @@ const openai = new OpenAI({
 	apiKey: process.env.OPENAI_API_KEY,
 });
 
-// 🔍 FIND RELEVANT DOCS
+// FIND RELEVANT DOCS
 
 const findRelevantDocs = async (queryEmbedding: number[]) => {
 	const result = await index.query({
@@ -84,6 +84,36 @@ router.post("/", async (req: Request, res: Response) => {
 		// GET HISTORY
 		const chat = await ChatModel.findById(chatId);
 
+		//  GENERATE TITLE ONLY IF FIRST USER MESSAGE
+		if (chat && (!chat.title || chat.title === "New Chat")) {
+			try {
+				const completion = await openai.chat.completions.create({
+					model: "gpt-4o-mini",
+					messages: [
+						{
+							role: "system",
+							content:
+								"Generate a short chat title (max 5 words).",
+						},
+						{
+							role: "user",
+							content: message,
+						},
+					],
+				});
+
+				const title =
+					completion.choices[0].message.content?.trim() ||
+					message.slice(0, 30);
+
+				await ChatModel.findByIdAndUpdate(chatId, {
+					title,
+				});
+			} catch (err) {
+				console.log("Title generation failed");
+			}
+		}
+
 		const history: ChatCompletionMessageParam[] =
 			chat?.messages?.slice(-8).map((m) => ({
 				role: m.role as "user" | "assistant",
@@ -113,6 +143,8 @@ IMPORTANT:
 - NEVER say information is missing if it exists.
 - DO NOT contradict the context.
 - If SKILLS section exists, always use it for skill-related questions.
+- If the requested information is not available, say that clearly,
+but also provide related relevant information from the context.
 
 RULES:
 - Use bullet points
@@ -193,16 +225,33 @@ router.post("/suggestions", async (req: Request, res: Response) => {
 			{
 				role: "system",
 				content: `
-					Generate 3 short follow-up questions.
+Generate 3 short follow-up questions BASED ONLY on the provided context.
 
-					Rules:
-					- max 8 words
-					- no numbering
-					- plain text
+STRICT RULES:
+- Only ask about information that CLEARLY EXISTS in the context
+- If something is not explicitly mentioned, DO NOT ask about it
+- NEVER ask about "learning", "future plans", or anything not present
 
-					Context:
-					${context}
-				`,
+IMPORTANT:
+- Questions MUST be answerable using the context
+- Do NOT guess or assume
+
+Rules:
+- max 8 words
+- no numbering
+- plain text
+
+Examples:
+
+Context: "He uses React and TypeScript"
+GOOD:
+- What technologies does he use?
+BAD:
+- What is he learning?
+
+Context:
+${context}
+	`,
 			},
 			{
 				role: "user",
