@@ -28,6 +28,18 @@ Ant Design, Tailwind, Material UI, SCSS, and Bootstrap.
 He built a full-stack application using React, TypeScript, Node.js, and Firebase.
 		`,
 	},
+	{
+		type: "about",
+		text: `
+Veljko Naumovic is a frontend developer with a focus on building scalable and high-performance web applications.
+
+He is motivated, detail-oriented, and enjoys solving complex problems.
+
+He has a strong interest in modern technologies, especially AI-powered applications and clean architecture.
+
+He values continuous learning and enjoys collaborating in team environments.
+	`,
+	},
 ];
 
 export const documents = structuredData.flatMap((doc, index) => {

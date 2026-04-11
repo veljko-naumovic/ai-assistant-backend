@@ -1,7 +1,6 @@
 import { Router, Request, Response } from "express";
 import OpenAI from "openai";
 import { createEmbedding } from "../utils/embeddings";
-import { documents } from "../data/documents";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { ChatModel } from "../models/Chat";
 import { index } from "../config/pinecone";
@@ -21,15 +20,17 @@ const findRelevantDocs = async (queryEmbedding: number[]) => {
 		includeMetadata: true,
 	});
 
-	return (result.matches || [])
-		.filter((m) => m.score && m.score > 0.7)
-		.map((match) => ({
-			text: String(match.metadata?.text || ""),
-			type: String(match.metadata?.type || "general"),
-		}));
+	return (
+		(result.matches || [])
+			// .filter((m) => m.score && m.score > 0.5)
+			.map((match) => ({
+				text: String(match.metadata?.text || ""),
+				type: String(match.metadata?.type || "general"),
+			}))
+	);
 };
 
-// 🧠 BUILD CONTEXT (reusable)
+//  BUILD CONTEXT (reusable)
 
 const buildContext = (relevantDocs: { text: string; type: string }[]) => {
 	const grouped = relevantDocs.reduce(
@@ -48,7 +49,7 @@ const buildContext = (relevantDocs: { text: string; type: string }[]) => {
 		.join("\n\n");
 };
 
-// 💬 CHAT (STREAM)
+//  CHAT (STREAM)
 
 router.post("/", async (req: Request, res: Response) => {
 	try {
@@ -56,6 +57,19 @@ router.post("/", async (req: Request, res: Response) => {
 			message: string;
 			chatId: string;
 		};
+
+		// VALIDATION
+		if (!message || !chatId) {
+			return res.status(400).json({
+				error: "Missing message or chatId",
+			});
+		}
+
+		if (typeof message !== "string") {
+			return res.status(400).json({
+				error: "Message must be a string",
+			});
+		}
 
 		// Save USER message
 		await ChatModel.findByIdAndUpdate(chatId, {
@@ -76,10 +90,12 @@ router.post("/", async (req: Request, res: Response) => {
 				content: m.content,
 			})) || [];
 
-		// 🔍 RAG
+		// RAG
 		const queryEmbedding = await createEmbedding(message);
 		const relevantDocs = await findRelevantDocs(queryEmbedding);
-		const context = buildContext(relevantDocs);
+		const context = relevantDocs.length
+			? buildContext(relevantDocs)
+			: "No relevant context found.";
 
 		const stream = await openai.chat.completions.create({
 			model: "gpt-4o-mini",
@@ -90,15 +106,13 @@ router.post("/", async (req: Request, res: Response) => {
 					content: `
 You are a personal assistant for Veljko.
 
-Use previous messages to maintain conversation context.
+Use ONLY the provided context.
 
-Use the structured context sections below:
-- EXPERIENCE
-- PROJECTS
-- SKILLS
-- FULLSTACK
-
-Answer ONLY using the context.
+IMPORTANT:
+- If information exists in the context, you MUST use it.
+- NEVER say information is missing if it exists.
+- DO NOT contradict the context.
+- If SKILLS section exists, always use it for skill-related questions.
 
 RULES:
 - Use bullet points
@@ -144,11 +158,17 @@ ${context}
 		res.end();
 	} catch (error) {
 		console.error("Stream error:", error);
-		res.status(500).send("Something went wrong");
+		try {
+			res.status(500).json({
+				error: "Internal server error",
+			});
+		} catch {
+			// fallback ako response već počeo
+		}
 	}
 });
 
-// 💡 SUGGESTIONS
+// SUGGESTIONS
 
 router.post("/suggestions", async (req: Request, res: Response) => {
 	try {
@@ -157,9 +177,17 @@ router.post("/suggestions", async (req: Request, res: Response) => {
 			answer?: string;
 		};
 
+		if (!message) {
+			return res.status(400).json({
+				error: "Missing message",
+			});
+		}
+
 		const queryEmbedding = await createEmbedding(message);
 		const relevantDocs = await findRelevantDocs(queryEmbedding);
-		const context = buildContext(relevantDocs);
+		const context = relevantDocs.length
+			? buildContext(relevantDocs)
+			: "No relevant context found.";
 
 		const messages: ChatCompletionMessageParam[] = [
 			{
@@ -204,12 +232,16 @@ router.post("/suggestions", async (req: Request, res: Response) => {
 
 		res.json({ suggestions });
 	} catch (error) {
-		console.error("Suggestions error:", error);
-		res.json({ suggestions: [] });
+		console.error("❌ Suggestions error:", error);
+
+		res.status(500).json({
+			suggestions: [],
+			error: "Failed to generate suggestions",
+		});
 	}
 });
 
-// ➕ CREATE
+//  CREATE
 
 router.post("/create", async (req, res) => {
 	const chat = await ChatModel.create({
@@ -223,17 +255,24 @@ router.post("/create", async (req, res) => {
 	res.json(chat);
 });
 
-// 📥 GET
+//  GET
 
 router.get("/", async (req, res) => {
 	const chats = await ChatModel.find().sort({ updatedAt: -1 });
 	res.json(chats);
 });
 
-// ✏️ RENAME
+// RENAME
 
 router.patch("/rename", async (req, res) => {
 	const { chatId, title } = req.body;
+
+	// VALIDATION PRVO
+	if (!chatId || !title) {
+		return res.status(400).json({
+			error: "Missing chatId or title",
+		});
+	}
 
 	const updated = await ChatModel.findByIdAndUpdate(
 		chatId,
@@ -244,17 +283,23 @@ router.patch("/rename", async (req, res) => {
 	res.json(updated);
 });
 
-// ❌ DELETE
+// DELETE
 
 router.delete("/:id", async (req, res) => {
 	await ChatModel.findByIdAndDelete(req.params.id);
 	res.json({ success: true });
 });
 
-// 📌 PIN
+// PIN
 
 router.patch("/pin", async (req, res) => {
 	const { chatId, pinned } = req.body;
+
+	if (!chatId || typeof pinned !== "boolean") {
+		return res.status(400).json({
+			error: "Invalid data",
+		});
+	}
 
 	const updated = await ChatModel.findByIdAndUpdate(
 		chatId,
