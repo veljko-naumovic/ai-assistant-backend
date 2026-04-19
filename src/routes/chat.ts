@@ -22,7 +22,7 @@ const findRelevantDocs = async (queryEmbedding: number[]) => {
 
 	return (
 		(result.matches || [])
-			// .filter((m) => m.score && m.score > 0.5)
+			// .filter((m) => m.score && m.score > 0.7)
 			.map((match) => ({
 				text: String(match.metadata?.text || ""),
 				type: String(match.metadata?.type || "general"),
@@ -30,7 +30,7 @@ const findRelevantDocs = async (queryEmbedding: number[]) => {
 	);
 };
 
-//  BUILD CONTEXT (reusable)
+// BUILD CONTEXT
 
 const buildContext = (relevantDocs: { text: string; type: string }[]) => {
 	const grouped = relevantDocs.reduce(
@@ -49,7 +49,7 @@ const buildContext = (relevantDocs: { text: string; type: string }[]) => {
 		.join("\n\n");
 };
 
-//  CHAT (STREAM)
+// CHAT (STREAM)
 
 router.post("/", async (req: Request, res: Response) => {
 	try {
@@ -58,34 +58,38 @@ router.post("/", async (req: Request, res: Response) => {
 			chatId: string;
 		};
 
-		// VALIDATION
+		const userId = (req.session as any).userId;
+
 		if (!message || !chatId) {
-			return res.status(400).json({
-				error: "Missing message or chatId",
-			});
+			return res.status(400).json({ error: "Missing message or chatId" });
 		}
 
 		if (typeof message !== "string") {
-			return res.status(400).json({
-				error: "Message must be a string",
-			});
+			return res.status(400).json({ error: "Message must be a string" });
+		}
+
+		// PROVERI CHAT + OWNERSHIP
+		const chat = await ChatModel.findOne({ _id: chatId, userId });
+
+		if (!chat) {
+			return res.status(404).json({ error: "Chat not found" });
 		}
 
 		// Save USER message
-		await ChatModel.findByIdAndUpdate(chatId, {
-			$push: {
-				messages: {
-					role: "user",
-					content: message,
+		await ChatModel.findOneAndUpdate(
+			{ _id: chatId, userId },
+			{
+				$push: {
+					messages: {
+						role: "user",
+						content: message,
+					},
 				},
 			},
-		});
+		);
 
-		// GET HISTORY
-		const chat = await ChatModel.findById(chatId);
-
-		//  GENERATE TITLE ONLY IF FIRST USER MESSAGE
-		if (chat && (!chat.title || chat.title === "New Chat")) {
+		// GENERATE TITLE
+		if (!chat.title || chat.title === "New Chat") {
 			try {
 				const completion = await openai.chat.completions.create({
 					model: "gpt-4o-mini",
@@ -106,19 +110,21 @@ router.post("/", async (req: Request, res: Response) => {
 					completion.choices[0].message.content?.trim() ||
 					message.slice(0, 30);
 
-				await ChatModel.findByIdAndUpdate(chatId, {
-					title,
-				});
-			} catch (err) {
+				await ChatModel.findOneAndUpdate(
+					{ _id: chatId, userId },
+					{ title },
+				);
+			} catch {
 				console.log("Title generation failed");
 			}
 		}
 
-		const history: ChatCompletionMessageParam[] =
-			chat?.messages?.slice(-8).map((m) => ({
+		const history: ChatCompletionMessageParam[] = chat.messages
+			.slice(-8)
+			.map((m) => ({
 				role: m.role as "user" | "assistant",
 				content: m.content,
-			})) || [];
+			}));
 
 		// RAG
 		const queryEmbedding = await createEmbedding(message);
@@ -178,25 +184,24 @@ ${context}
 		}
 
 		// Save AI response
-		await ChatModel.findByIdAndUpdate(chatId, {
-			$push: {
-				messages: {
-					role: "assistant",
-					content: fullText,
+		await ChatModel.findOneAndUpdate(
+			{ _id: chatId, userId },
+			{
+				$push: {
+					messages: {
+						role: "assistant",
+						content: fullText,
+					},
 				},
 			},
-		});
+		);
 
 		res.end();
 	} catch (error) {
 		console.error("Stream error:", error);
 		try {
-			res.status(500).json({
-				error: "Internal server error",
-			});
-		} catch {
-			// fallback ako response već počeo
-		}
+			res.status(500).json({ error: "Internal server error" });
+		} catch {}
 	}
 });
 
@@ -204,15 +209,10 @@ ${context}
 
 router.post("/suggestions", async (req: Request, res: Response) => {
 	try {
-		const { message, answer } = req.body as {
-			message: string;
-			answer?: string;
-		};
+		const { message, answer } = req.body;
 
 		if (!message) {
-			return res.status(400).json({
-				error: "Missing message",
-			});
+			return res.status(400).json({ error: "Missing message" });
 		}
 
 		const queryEmbedding = await createEmbedding(message);
@@ -241,29 +241,15 @@ Rules:
 - no numbering
 - plain text
 
-Examples:
-
-Context: "He uses React and TypeScript"
-GOOD:
-- What technologies does he use?
-BAD:
-- What is he learning?
-
 Context:
 ${context}
-	`,
+				`,
 			},
-			{
-				role: "user",
-				content: message,
-			},
+			{ role: "user", content: message },
 		];
 
 		if (answer) {
-			messages.push({
-				role: "assistant",
-				content: answer,
-			});
+			messages.push({ role: "assistant", content: answer });
 		}
 
 		const completion = await openai.chat.completions.create({
@@ -281,19 +267,18 @@ ${context}
 
 		res.json({ suggestions });
 	} catch (error) {
-		console.error("❌ Suggestions error:", error);
-
-		res.status(500).json({
-			suggestions: [],
-			error: "Failed to generate suggestions",
-		});
+		console.error("Suggestions error:", error);
+		res.status(500).json({ suggestions: [] });
 	}
 });
 
-//  CREATE
+// CREATE
 
 router.post("/create", async (req, res) => {
+	const userId = (req.session as any).userId;
+
 	const chat = await ChatModel.create({
+		userId,
 		messages: [
 			{
 				role: "assistant",
@@ -301,13 +286,19 @@ router.post("/create", async (req, res) => {
 			},
 		],
 	});
+
 	res.json(chat);
 });
 
-//  GET
+// GET
 
 router.get("/", async (req, res) => {
-	const chats = await ChatModel.find().sort({ updatedAt: -1 });
+	const userId = (req.session as any).userId;
+
+	const chats = await ChatModel.find({ userId }).sort({
+		updatedAt: -1,
+	});
+
 	res.json(chats);
 });
 
@@ -315,16 +306,14 @@ router.get("/", async (req, res) => {
 
 router.patch("/rename", async (req, res) => {
 	const { chatId, title } = req.body;
+	const userId = (req.session as any).userId;
 
-	// VALIDATION PRVO
 	if (!chatId || !title) {
-		return res.status(400).json({
-			error: "Missing chatId or title",
-		});
+		return res.status(400).json({ error: "Missing chatId or title" });
 	}
 
-	const updated = await ChatModel.findByIdAndUpdate(
-		chatId,
+	const updated = await ChatModel.findOneAndUpdate(
+		{ _id: chatId, userId },
 		{ title },
 		{ returnDocument: "after" },
 	);
@@ -335,7 +324,13 @@ router.patch("/rename", async (req, res) => {
 // DELETE
 
 router.delete("/:id", async (req, res) => {
-	await ChatModel.findByIdAndDelete(req.params.id);
+	const userId = (req.session as any).userId;
+
+	await ChatModel.findOneAndDelete({
+		_id: req.params.id,
+		userId,
+	});
+
 	res.json({ success: true });
 });
 
@@ -343,15 +338,14 @@ router.delete("/:id", async (req, res) => {
 
 router.patch("/pin", async (req, res) => {
 	const { chatId, pinned } = req.body;
+	const userId = (req.session as any).userId;
 
 	if (!chatId || typeof pinned !== "boolean") {
-		return res.status(400).json({
-			error: "Invalid data",
-		});
+		return res.status(400).json({ error: "Invalid data" });
 	}
 
-	const updated = await ChatModel.findByIdAndUpdate(
-		chatId,
+	const updated = await ChatModel.findOneAndUpdate(
+		{ _id: chatId, userId },
 		{ pinned },
 		{ returnDocument: "after" },
 	);
