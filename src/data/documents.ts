@@ -70,6 +70,17 @@ He understands concepts like vector search, semantic search, and context-based A
 		`,
 	},
 	{
+		type: "learning",
+		text: `
+Veljko is currently learning:
+
+- Improving his backend skills with Node.js and Express
+- Exploring how to build scalable and maintainable applications
+- Learning more about AI systems, especially RAG and prompt engineering
+- Continuously improving performance and architecture in frontend applications
+  `,
+	},
+	{
 		type: "about",
 		text: `
 Veljko Naumovic is a motivated and experienced Frontend Developer specializing in React and modern JavaScript technologies.
