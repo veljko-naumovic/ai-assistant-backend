@@ -58,7 +58,11 @@ router.post("/", async (req: Request, res: Response) => {
 			chatId: string;
 		};
 
-		const userId = (req.session as any).userId;
+		const userId = req.headers["x-user-id"] as string;
+
+		if (!userId) {
+			return res.status(400).json({ error: "Missing userId" });
+		}
 
 		if (!message || !chatId) {
 			return res.status(400).json({ error: "Missing message or chatId" });
@@ -275,7 +279,11 @@ ${context}
 // CREATE
 
 router.post("/create", async (req, res) => {
-	const userId = (req.session as any).userId;
+	const userId = req.headers["x-user-id"] as string;
+
+	if (!userId) {
+		return res.status(400).json({ error: "Missing userId" });
+	}
 
 	const chat = await ChatModel.create({
 		userId,
@@ -293,7 +301,11 @@ router.post("/create", async (req, res) => {
 // GET
 
 router.get("/", async (req, res) => {
-	const userId = (req.session as any).userId;
+	const userId = req.headers["x-user-id"] as string;
+
+	if (!userId) {
+		return res.status(400).json({ error: "Missing userId" });
+	}
 
 	const chats = await ChatModel.find({ userId }).sort({
 		updatedAt: -1,
@@ -306,7 +318,11 @@ router.get("/", async (req, res) => {
 
 router.patch("/rename", async (req, res) => {
 	const { chatId, title } = req.body;
-	const userId = (req.session as any).userId;
+	const userId = req.headers["x-user-id"] as string;
+
+	if (!userId) {
+		return res.status(400).json({ error: "Missing userId" });
+	}
 
 	if (!chatId || !title) {
 		return res.status(400).json({ error: "Missing chatId or title" });
@@ -324,7 +340,11 @@ router.patch("/rename", async (req, res) => {
 // DELETE
 
 router.delete("/:id", async (req, res) => {
-	const userId = (req.session as any).userId;
+	const userId = req.headers["x-user-id"] as string;
+
+	if (!userId) {
+		return res.status(400).json({ error: "Missing userId" });
+	}
 
 	await ChatModel.findOneAndDelete({
 		_id: req.params.id,
@@ -338,7 +358,11 @@ router.delete("/:id", async (req, res) => {
 
 router.patch("/pin", async (req, res) => {
 	const { chatId, pinned } = req.body;
-	const userId = (req.session as any).userId;
+	const userId = req.headers["x-user-id"] as string;
+
+	if (!userId) {
+		return res.status(400).json({ error: "Missing userId" });
+	}
 
 	if (!chatId || typeof pinned !== "boolean") {
 		return res.status(400).json({ error: "Invalid data" });

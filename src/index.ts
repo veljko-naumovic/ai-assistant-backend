@@ -16,7 +16,7 @@ app.use(
 	cors({
 		origin: [
 			"http://localhost:5173",
-			"https://ai-assistant-backend-67zn.onrender.com",
+			"https://veljko-naumovic-portfolio.web.app",
 		],
 		credentials: true,
 	}),
