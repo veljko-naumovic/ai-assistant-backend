@@ -14,7 +14,10 @@ connectDB();
 
 app.use(
 	cors({
-		origin: "http://localhost:5173",
+		origin: [
+			"http://localhost:5173",
+			"https://ai-assistant-backend-67zn.onrender.com",
+		],
 		credentials: true,
 	}),
 );
@@ -27,7 +30,8 @@ app.use(
 		saveUninitialized: false,
 		cookie: {
 			httpOnly: true,
-			secure: false,
+			secure: true,
+			sameSite: "none",
 			maxAge: 1000 * 60 * 60 * 24 * 7,
 		},
 	}),
