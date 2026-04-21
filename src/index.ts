@@ -19,6 +19,8 @@ app.use(
 			"https://veljko-naumovic-portfolio.web.app",
 		],
 		credentials: true,
+		methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+		allowedHeaders: ["Content-Type", "x-user-id"],
 	}),
 );
 
