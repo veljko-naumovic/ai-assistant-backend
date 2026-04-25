@@ -229,25 +229,27 @@ router.post("/suggestions", async (req: Request, res: Response) => {
 			{
 				role: "system",
 				content: `
-Generate 3 short follow-up questions BASED ONLY on the provided context.
+					Generate 3 short follow-up questions BASED ONLY on the provided context.
 
-STRICT RULES:
-- Only ask about information that CLEARLY EXISTS in the context
-- If something is not explicitly mentioned, DO NOT ask about it
-- NEVER ask about "learning", "future plans", or anything not present
+					STRICT RULES:
+					- Only ask about information that CLEARLY EXISTS in the context
+					- NEVER repeat the user's current question
+					- NEVER repeat similar questions
+					- Questions MUST be different from each other
+					- Avoid asking the same thing in different wording
 
-IMPORTANT:
-- Questions MUST be answerable using the context
-- Do NOT guess or assume
+					IMPORTANT:
+					- Questions MUST be answerable using the context
+					- Do NOT guess or assume
 
-Rules:
-- max 8 words
-- no numbering
-- plain text
+					Rules:
+					- max 8 words
+					- no numbering
+					- plain text
 
-Context:
-${context}
-				`,
+					Context:
+					${context}
+					`,
 			},
 			{ role: "user", content: message },
 		];
