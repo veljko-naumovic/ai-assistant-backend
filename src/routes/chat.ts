@@ -16,18 +16,16 @@ const openai = new OpenAI({
 const findRelevantDocs = async (queryEmbedding: number[]) => {
 	const result = await index.query({
 		vector: queryEmbedding,
-		topK: 5,
+		topK: 3,
 		includeMetadata: true,
 	});
 
-	return (
-		(result.matches || [])
-			// .filter((m) => m.score && m.score > 0.7)
-			.map((match) => ({
-				text: String(match.metadata?.text || ""),
-				type: String(match.metadata?.type || "general"),
-			}))
-	);
+	return (result.matches || [])
+		.filter((m) => m.score && m.score > 0.75)
+		.map((match) => ({
+			text: String(match.metadata?.text || ""),
+			type: String(match.metadata?.type || "general"),
+		}));
 };
 
 // BUILD CONTEXT
@@ -44,7 +42,7 @@ const buildContext = (relevantDocs: { text: string; type: string }[]) => {
 
 	return Object.entries(grouped)
 		.map(([type, texts]) => {
-			return `${type.toUpperCase()}:\n${texts.join("\n")}`;
+			return `### ${type.toUpperCase()}\n${texts.join("\n")}`;
 		})
 		.join("\n\n");
 };
@@ -124,7 +122,7 @@ router.post("/", async (req: Request, res: Response) => {
 		}
 
 		const history: ChatCompletionMessageParam[] = chat.messages
-			.slice(-8)
+			.slice(-4)
 			.map((m) => ({
 				role: m.role as "user" | "assistant",
 				content: m.content,
@@ -135,36 +133,50 @@ router.post("/", async (req: Request, res: Response) => {
 		const relevantDocs = await findRelevantDocs(queryEmbedding);
 		const context = relevantDocs.length
 			? buildContext(relevantDocs)
-			: "No relevant context found.";
+			: "General information about Veljko is available.";
 
 		const stream = await openai.chat.completions.create({
 			model: "gpt-4o-mini",
 			stream: true,
+			temperature: 0.3,
 			messages: [
 				{
 					role: "system",
 					content: `
-You are a personal assistant for Veljko.
+You are an AI assistant that presents information about Veljko Naumovic.
 
-Use ONLY the provided context.
+GOAL:
+- Help users learn about Veljko in a clear and professional way.
 
-IMPORTANT:
-- If information exists in the context, you MUST use it.
-- NEVER say information is missing if it exists.
-- DO NOT contradict the context.
-- If SKILLS section exists, always use it for skill-related questions.
-- If the requested information is not available, say that clearly,
-but also provide related relevant information from the context.
+STYLE:
+- Speak naturally, like a helpful assistant
+- Always refer to Veljko in third person (never "I")
+- Keep answers concise (3–6 bullet points max)
+- Prioritize practical and real-world experience
+- Highlight technologies and impact when relevant
+- Use bullet points when listing
+- Use **bold** for important terms
 
 RULES:
-- Use bullet points
-- Use **bold**
-- Be concise
-- Do NOT invent information
+- Prefer using the provided context
+- If the exact answer is missing, provide the closest relevant information
+- NEVER say "I cannot engage" or similar refusals
+- NEVER mention "context" or "provided data"
+- Do NOT invent facts
+- Always write complete and clear sentences
+- Avoid incomplete bullet points or fragments
+- Always respond in the same language as the user
+- You can communicate in multiple languages, including Serbian and English
+- Do NOT say you cannot speak a language
+- If the user switches language, follow that language automatically
+
+BEHAVIOR:
+- If user asks something outside scope → gently redirect to Veljko
+- If partial info exists → still answer usefully
 
 Context:
 ${context}
-					`,
+`,
 				},
 				...history,
 				{
@@ -215,7 +227,7 @@ router.post("/suggestions", async (req, res) => {
 	try {
 		const { answer } = req.body;
 
-		// filter bad answers
+		// filter bad bad Phrases
 		const badPhrases = [
 			"cannot engage",
 			"outside of the context",
@@ -236,29 +248,34 @@ router.post("/suggestions", async (req, res) => {
 		// AI suggestions
 		const completion = await openai.chat.completions.create({
 			model: "gpt-4o-mini",
+			temperature: 0.5,
 			messages: [
 				{
 					role: "system",
 					content: `
-Generate 3 short follow-up questions about Veljko.
+							Generate 3 relevant follow-up questions about Veljko.
 
-IMPORTANT:
-- Only use useful information about Veljko
-- Ignore refusal or "no context" responses
-- If no useful info exists, return empty array
+							Rules:
+							- Based on useful info from the answer
+							- Avoid generic questions
+							- max 8 words
+							- no numbering
+							- plain text
 
-Rules:
-- max 8 words
-- no numbering
-- plain text
-`,
+							Good examples:
+							- What technologies does Veljko use?
+							- Which projects did he build?
+							- What is his main focus?
+
+							Bad:
+							- irrelevant or vague questions
+							`,
 				},
 				{
 					role: "user",
 					content: answer,
 				},
 			],
-			temperature: 0.7,
 		});
 
 		const raw = completion.choices[0].message.content || "";
@@ -266,8 +283,8 @@ Rules:
 		// parsing
 		const suggestions = raw
 			.split("\n")
-			.map((s) => s.trim())
-			.filter(Boolean)
+			.map((s) => s.replace(/^\d+\.?\s*/, "").trim())
+			.filter((s) => s.length > 5)
 			.slice(0, 3);
 
 		res.json({ suggestions });

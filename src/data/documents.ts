@@ -29,7 +29,10 @@ tailored to internal business needs and delivered as a production-ready solution
 Veljko's core technical skills include:
 
 Frontend:
-React, Next.js, JavaScript, TypeScript
+Veljko primarily works with React and Next.js, and also has experience with Vue.js.
+
+Technologies:
+React, Next.js, Vue.js, JavaScript, TypeScript
 
 UI & Styling:
 Ant Design, Material UI, Tailwind CSS, Bootstrap, SCSS
