@@ -211,60 +211,59 @@ ${context}
 
 // SUGGESTIONS
 
-router.post("/suggestions", async (req: Request, res: Response) => {
+router.post("/suggestions", async (req, res) => {
 	try {
-		const { message, answer } = req.body;
+		const { answer } = req.body;
 
-		if (!message) {
-			return res.status(400).json({ error: "Missing message" });
-		}
-
-		const queryEmbedding = await createEmbedding(message);
-		const relevantDocs = await findRelevantDocs(queryEmbedding);
-		const context = relevantDocs.length
-			? buildContext(relevantDocs)
-			: "No relevant context found.";
-
-		const messages: ChatCompletionMessageParam[] = [
-			{
-				role: "system",
-				content: `
-					Generate 3 short follow-up questions BASED ONLY on the provided context.
-
-					STRICT RULES:
-					- Only ask about information that CLEARLY EXISTS in the context
-					- NEVER repeat the user's current question
-					- NEVER repeat similar questions
-					- Questions MUST be different from each other
-					- Avoid asking the same thing in different wording
-
-					IMPORTANT:
-					- Questions MUST be answerable using the context
-					- Do NOT guess or assume
-
-					Rules:
-					- max 8 words
-					- no numbering
-					- plain text
-
-					Context:
-					${context}
-					`,
-			},
-			{ role: "user", content: message },
+		// filter bad answers
+		const badPhrases = [
+			"cannot engage",
+			"outside of the context",
+			"not provided in the context",
+			"i don't have information",
+			"i do not have information",
+			"no relevant information",
 		];
 
-		if (answer) {
-			messages.push({ role: "assistant", content: answer });
+		const isBadAnswer = badPhrases.some((p) =>
+			answer?.toLowerCase().includes(p),
+		);
+
+		if (isBadAnswer) {
+			return res.json({ suggestions: [] });
 		}
 
+		// AI suggestions
 		const completion = await openai.chat.completions.create({
 			model: "gpt-4o-mini",
-			messages,
+			messages: [
+				{
+					role: "system",
+					content: `
+Generate 3 short follow-up questions about Veljko.
+
+IMPORTANT:
+- Only use useful information about Veljko
+- Ignore refusal or "no context" responses
+- If no useful info exists, return empty array
+
+Rules:
+- max 8 words
+- no numbering
+- plain text
+`,
+				},
+				{
+					role: "user",
+					content: answer,
+				},
+			],
+			temperature: 0.7,
 		});
 
 		const raw = completion.choices[0].message.content || "";
 
+		// parsing
 		const suggestions = raw
 			.split("\n")
 			.map((s) => s.trim())
@@ -272,8 +271,8 @@ router.post("/suggestions", async (req: Request, res: Response) => {
 			.slice(0, 3);
 
 		res.json({ suggestions });
-	} catch (error) {
-		console.error("Suggestions error:", error);
+	} catch (err) {
+		console.error("Suggestions error:", err);
 		res.status(500).json({ suggestions: [] });
 	}
 });
