@@ -4,6 +4,7 @@ import { createEmbedding } from "../utils/embeddings";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { ChatModel } from "../models/Chat";
 import { index } from "../config/pinecone";
+import { documents } from "../data/documents";
 
 const router = Router();
 
@@ -16,12 +17,12 @@ const openai = new OpenAI({
 const findRelevantDocs = async (queryEmbedding: number[]) => {
 	const result = await index.query({
 		vector: queryEmbedding,
-		topK: 3,
+		topK: 7,
 		includeMetadata: true,
 	});
 
 	return (result.matches || [])
-		.filter((m) => m.score && m.score > 0.75)
+		.filter((m) => m.score && m.score > 0.2)
 		.map((match) => ({
 			text: String(match.metadata?.text || ""),
 			type: String(match.metadata?.type || "general"),
@@ -39,6 +40,8 @@ const buildContext = (relevantDocs: { text: string; type: string }[]) => {
 		},
 		{} as Record<string, string[]>,
 	);
+
+	console.log("RAW RELEVANT:", relevantDocs);
 
 	return Object.entries(grouped)
 		.map(([type, texts]) => {
@@ -70,14 +73,14 @@ router.post("/", async (req: Request, res: Response) => {
 			return res.status(400).json({ error: "Message must be a string" });
 		}
 
-		// PROVERI CHAT + OWNERSHIP
+		// CHAT CHECK
 		const chat = await ChatModel.findOne({ _id: chatId, userId });
 
 		if (!chat) {
 			return res.status(404).json({ error: "Chat not found" });
 		}
 
-		// Save USER message
+		// SAVE USER MESSAGE
 		await ChatModel.findOneAndUpdate(
 			{ _id: chatId, userId },
 			{
@@ -90,7 +93,7 @@ router.post("/", async (req: Request, res: Response) => {
 			},
 		);
 
-		// GENERATE TITLE
+		// TITLE
 		if (!chat.title || chat.title === "New Chat") {
 			try {
 				const completion = await openai.chat.completions.create({
@@ -98,13 +101,9 @@ router.post("/", async (req: Request, res: Response) => {
 					messages: [
 						{
 							role: "system",
-							content:
-								"Generate a short chat title (max 5 words).",
+							content: "Generate short title (max 5 words).",
 						},
-						{
-							role: "user",
-							content: message,
-						},
+						{ role: "user", content: message },
 					],
 				});
 
@@ -116,9 +115,7 @@ router.post("/", async (req: Request, res: Response) => {
 					{ _id: chatId, userId },
 					{ title },
 				);
-			} catch {
-				console.log("Title generation failed");
-			}
+			} catch {}
 		}
 
 		const history: ChatCompletionMessageParam[] = chat.messages
@@ -128,13 +125,95 @@ router.post("/", async (req: Request, res: Response) => {
 				content: m.content,
 			}));
 
+		// INTENT
+		let intent = "general";
+
+		try {
+			const intentRes = await openai.chat.completions.create({
+				model: "gpt-4o-mini",
+				messages: [
+					{
+						role: "system",
+						content:
+							"Classify into ONE: experience | projects | skills | technologies | learning | education | about | general. Return ONLY category.",
+					},
+					{ role: "user", content: message },
+				],
+			});
+
+			intent =
+				intentRes.choices[0].message.content?.trim().toLowerCase() ||
+				"general";
+		} catch {}
+
 		// RAG
 		const queryEmbedding = await createEmbedding(message);
-		const relevantDocs = await findRelevantDocs(queryEmbedding);
-		const context = relevantDocs.length
-			? buildContext(relevantDocs)
-			: "General information about Veljko is available.";
+		let finalDocs = await findRelevantDocs(queryEmbedding);
 
+		console.log(
+			"RELEVANT DOC TYPES:",
+			finalDocs.map((d) => d.type),
+		);
+
+		// MAP
+		const intentMap: Record<string, string[]> = {
+			experience: ["experience", "projects"],
+			projects: ["projects", "fullstack"],
+			skills: ["skills"],
+			technologies: ["skills"],
+			learning: ["learning"],
+			education: ["education"],
+			about: ["about"],
+			general: ["about", "experience"],
+		};
+
+		// if (intentMap[intent]) {
+		// 	const types = intentMap[intent];
+
+		// 	finalDocs = types.flatMap((t) =>
+		// 		finalDocs.filter((d) => d.type === t),
+		// 	);
+
+		// 	console.log("INTENT:", intent);
+		// 	console.log("EXPECTED TYPES:", types);
+		// 	console.log(
+		// 		"FINAL DOC TYPES:",
+		// 		finalDocs.map((d) => d.type),
+		// 	);
+		// }
+
+		const types = intentMap[intent] || ["about"];
+
+		finalDocs = types.flatMap((t) => finalDocs.filter((d) => d.type === t));
+
+		const missingTypes = types.filter(
+			(t) => !finalDocs.some((d) => d.type === t),
+		);
+
+		const fallbackDocs = missingTypes
+			.map((t) => documents.find((d) => d.type === t))
+			.filter(
+				(
+					doc,
+				): doc is {
+					type: string;
+					text: string;
+				} => Boolean(doc),
+			);
+
+		finalDocs = [...finalDocs, ...fallbackDocs];
+
+		// FALLBACK
+		if (!finalDocs.length) {
+			finalDocs = [
+				...documents.filter((d) => d.type === "experience"),
+				...documents.filter((d) => d.type === "projects"),
+			];
+		}
+
+		const context = buildContext(finalDocs);
+		console.log("CONTEXT:\n", context);
+		// AI
 		const stream = await openai.chat.completions.create({
 			model: "gpt-4o-mini",
 			stream: true,
@@ -143,40 +222,34 @@ router.post("/", async (req: Request, res: Response) => {
 				{
 					role: "system",
 					content: `
-You are an AI assistant that presents information about Veljko Naumovic.
+You are an AI assistant about Veljko Naumovic.
 
-GOAL:
-- Help users learn about Veljko in a clear and professional way.
+- Speak in third person
+- Always start with current role (Frontend Developer at Eponuda)
 
-STYLE:
-- Speak naturally, like a helpful assistant
-- Always refer to Veljko in third person (never "I")
-- Keep answers concise (3–6 bullet points max)
-- Prioritize practical and real-world experience
-- Highlight technologies and impact when relevant
-- Use bullet points when listing
-- Use **bold** for important terms
-
-RULES:
-- Prefer using the provided context
-- If the exact answer is missing, provide the closest relevant information
-- NEVER say "I cannot engage" or similar refusals
-- NEVER mention "context" or "provided data"
+- Be direct and specific
+- Use ONLY provided context
 - Do NOT invent facts
-- Always write complete and clear sentences
-- Avoid incomplete bullet points or fragments
-- Always respond in the same language as the user
-- You can communicate in multiple languages, including Serbian and English
-- Do NOT say you cannot speak a language
-- If the user switches language, follow that language automatically
 
-BEHAVIOR:
-- If user asks something outside scope → gently redirect to Veljko
-- If partial info exists → still answer usefully
+- Each sentence must add new, concrete information
+- Remove redundant or overlapping information
 
-Context:
-${context}
+- It is allowed to give shorter answers if no additional useful information exists
+
+- Do not add summary or introductory sentences
+- Do not mix formats (use a single consistent format)
+
+- Use direct action verbs from the context (e.g. builds, works with, implements)
+- Do NOT rewrite into formal CV-style phrases (e.g. "has experience", "is responsible for", "involves")
+
+- When multiple context sections are provided, use ALL relevant sections in the answer
+
+- Write in a natural, human tone while staying professional
 `,
+				},
+				{
+					role: "system",
+					content: `Context:\n${context}`,
 				},
 				...history,
 				{
@@ -199,7 +272,7 @@ ${context}
 			res.write(text);
 		}
 
-		// Save AI response
+		// SAVE RESPONSE
 		await ChatModel.findOneAndUpdate(
 			{ _id: chatId, userId },
 			{
@@ -213,14 +286,11 @@ ${context}
 		);
 
 		res.end();
-	} catch (error) {
-		console.error("Stream error:", error);
-		try {
-			res.status(500).json({ error: "Internal server error" });
-		} catch {}
+	} catch (err) {
+		console.error(err);
+		res.status(500).json({ error: "Internal server error" });
 	}
 });
-
 // SUGGESTIONS
 
 router.post("/suggestions", async (req, res) => {
