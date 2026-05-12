@@ -4,7 +4,7 @@ import { documents } from "../data/documents";
 import { createEmbedding } from "../utils/embeddings";
 
 const seed = async () => {
-	console.log("🚀 Seeding Pinecone...");
+	console.log("Seeding Pinecone...");
 
 	await index.deleteAll(); // first delete than feed with data
 
@@ -27,7 +27,7 @@ const seed = async () => {
 		records: vectors,
 	});
 
-	console.log("✅ Done seeding");
+	console.log("Done seeding");
 	process.exit(0);
 };
 

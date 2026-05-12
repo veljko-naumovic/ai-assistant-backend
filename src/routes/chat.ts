@@ -41,8 +41,6 @@ const buildContext = (relevantDocs: { text: string; type: string }[]) => {
 		{} as Record<string, string[]>,
 	);
 
-	console.log("RAW RELEVANT:", relevantDocs);
-
 	return Object.entries(grouped)
 		.map(([type, texts]) => {
 			return `### ${type.toUpperCase()}\n${texts.join("\n")}`;
@@ -135,7 +133,7 @@ router.post("/", async (req: Request, res: Response) => {
 					{
 						role: "system",
 						content:
-							"Classify into ONE: experience | projects | skills | technologies | learning | education | about | general. Return ONLY category.",
+							"Classify into ONE: experience | projects | skills | technologies | learning | education | about | story | background | career | general. Return ONLY category.",
 					},
 					{ role: "user", content: message },
 				],
@@ -150,11 +148,6 @@ router.post("/", async (req: Request, res: Response) => {
 		const queryEmbedding = await createEmbedding(message);
 		let finalDocs = await findRelevantDocs(queryEmbedding);
 
-		console.log(
-			"RELEVANT DOC TYPES:",
-			finalDocs.map((d) => d.type),
-		);
-
 		// MAP
 		const intentMap: Record<string, string[]> = {
 			experience: ["experience", "projects"],
@@ -164,23 +157,11 @@ router.post("/", async (req: Request, res: Response) => {
 			learning: ["learning"],
 			education: ["education"],
 			about: ["about"],
+			story: ["story", "education", "about"],
+			background: ["story", "education", "about"],
+			career: ["story", "experience", "about"],
 			general: ["about", "experience"],
 		};
-
-		// if (intentMap[intent]) {
-		// 	const types = intentMap[intent];
-
-		// 	finalDocs = types.flatMap((t) =>
-		// 		finalDocs.filter((d) => d.type === t),
-		// 	);
-
-		// 	console.log("INTENT:", intent);
-		// 	console.log("EXPECTED TYPES:", types);
-		// 	console.log(
-		// 		"FINAL DOC TYPES:",
-		// 		finalDocs.map((d) => d.type),
-		// 	);
-		// }
 
 		const types = intentMap[intent] || ["about"];
 
@@ -212,7 +193,6 @@ router.post("/", async (req: Request, res: Response) => {
 		}
 
 		const context = buildContext(finalDocs);
-		console.log("CONTEXT:\n", context);
 		// AI
 		const stream = await openai.chat.completions.create({
 			model: "gpt-4o-mini",
@@ -222,30 +202,34 @@ router.post("/", async (req: Request, res: Response) => {
 				{
 					role: "system",
 					content: `
-You are an AI assistant about Veljko Naumovic.
+							You are an AI assistant about Veljko Naumovic.
 
-- Speak in third person
-- Always start with current role (Frontend Developer at Eponuda)
+							- Always start with current role (Frontend Developer at Eponuda)
 
-- Be direct and specific
-- Use ONLY provided context
-- Do NOT invent facts
+							- Be direct and specific
+							- Use ONLY provided context
+							- Do NOT invent facts
 
-- Each sentence must add new, concrete information
-- Remove redundant or overlapping information
+							- Each sentence must add new, concrete information
+							- Remove redundant or overlapping information
 
-- It is allowed to give shorter answers if no additional useful information exists
+							- It is allowed to give shorter answers if no additional useful information exists
 
-- Do not add summary or introductory sentences
-- Do not mix formats (use a single consistent format)
+							- Do not add summary or introductory sentences
+							- Do not mix formats (use a single consistent format)
 
-- Use direct action verbs from the context (e.g. builds, works with, implements)
-- Do NOT rewrite into formal CV-style phrases (e.g. "has experience", "is responsible for", "involves")
+							- Do not infer specific implementation details from general terms
+							- If information is not explicitly provided, say that the context does not contain that detail
 
-- When multiple context sections are provided, use ALL relevant sections in the answer
+							- Use bullet points for technologies and skills questions
 
-- Write in a natural, human tone while staying professional
-`,
+							- Use direct action verbs from the context (e.g. builds, works with, implements)
+							- Do NOT rewrite into formal CV-style phrases (e.g. "has experience", "is responsible for", "involves")
+
+							- When multiple context sections are provided, use ALL relevant sections in the answer
+
+							- Write in a natural, human tone while staying professional
+					`,
 				},
 				{
 					role: "system",
@@ -295,9 +279,26 @@ You are an AI assistant about Veljko Naumovic.
 
 router.post("/suggestions", async (req, res) => {
 	try {
-		const { answer } = req.body;
+		const {
+			answer,
+			history = [],
+		}: {
+			answer: string;
+			history: { role: string; content: string }[];
+		} = req.body;
 
-		// filter bad bad Phrases
+		// ---------------------------------------------------
+		// fallback suggestions
+		// ---------------------------------------------------
+		const fallbackSuggestions = [
+			"What projects has Veljko worked on?",
+			"What technologies does Veljko use?",
+			"Tell me about his experience",
+		];
+
+		// ---------------------------------------------------
+		// invalid / empty answers
+		// ---------------------------------------------------
 		const badPhrases = [
 			"cannot engage",
 			"outside of the context",
@@ -305,41 +306,235 @@ router.post("/suggestions", async (req, res) => {
 			"i don't have information",
 			"i do not have information",
 			"no relevant information",
+			"context does not contain",
 		];
 
-		const isBadAnswer = badPhrases.some((p) =>
-			answer?.toLowerCase().includes(p),
-		);
+		const lowerAnswer = answer?.toLowerCase() || "";
+
+		const isBadAnswer = badPhrases.some((p) => lowerAnswer.includes(p));
 
 		if (isBadAnswer) {
-			return res.json({ suggestions: [] });
+			return res.json({
+				suggestions: fallbackSuggestions,
+			});
 		}
 
+		// ---------------------------------------------------
+		// recent user questions
+		// ---------------------------------------------------
+		const recentQuestions = history
+			.filter((m) => m.role === "user")
+			.map((m) => m.content)
+			.slice(-10);
+
+		const recentQuestionsText = recentQuestions.join("\n");
+
+		// ---------------------------------------------------
+		// semantic topic memory
+		// ---------------------------------------------------
+		const usedTopicGroups = new Set<string>();
+
+		recentQuestions.forEach((q) => {
+			const lower = q.toLowerCase();
+
+			// company
+			if (
+				lower.includes("company") ||
+				lower.includes("work") ||
+				lower.includes("eponuda") ||
+				lower.includes("organization")
+			) {
+				usedTopicGroups.add("company");
+			}
+
+			// role
+			if (
+				lower.includes("role") ||
+				lower.includes("job") ||
+				lower.includes("title") ||
+				lower.includes("frontend developer")
+			) {
+				usedTopicGroups.add("role");
+			}
+
+			// projects / systems
+			if (
+				lower.includes("project") ||
+				lower.includes("platform") ||
+				lower.includes("application") ||
+				lower.includes("system")
+			) {
+				usedTopicGroups.add("project");
+			}
+
+			// technologies
+			if (
+				lower.includes("technology") ||
+				lower.includes("react") ||
+				lower.includes("next") ||
+				lower.includes("vue") ||
+				lower.includes("typescript") ||
+				lower.includes("firebase") ||
+				lower.includes("node") ||
+				lower.includes("redux")
+			) {
+				usedTopicGroups.add("technology");
+			}
+
+			// ui libraries
+			if (
+				lower.includes("ui") ||
+				lower.includes("library") ||
+				lower.includes("material ui") ||
+				lower.includes("ant design") ||
+				lower.includes("tailwind") ||
+				lower.includes("bootstrap") ||
+				lower.includes("scss")
+			) {
+				usedTopicGroups.add("ui");
+			}
+
+			// features
+			if (
+				lower.includes("feature") ||
+				lower.includes("dashboard") ||
+				lower.includes("table") ||
+				lower.includes("form") ||
+				lower.includes("chart") ||
+				lower.includes("filter")
+			) {
+				usedTopicGroups.add("features");
+			}
+
+			// experience
+			if (
+				lower.includes("experience") ||
+				lower.includes("career") ||
+				lower.includes("background")
+			) {
+				usedTopicGroups.add("experience");
+			}
+		});
+
+		// ---------------------------------------------------
+		// question groups
+		// ---------------------------------------------------
+		const questionGroups = [
+			{
+				group: "company",
+				keywords: ["company", "work", "organization", "eponuda"],
+			},
+			{
+				group: "role",
+				keywords: ["role", "job", "title", "frontend developer"],
+			},
+			{
+				group: "project",
+				keywords: ["project", "platform", "application", "system"],
+			},
+			{
+				group: "technology",
+				keywords: [
+					"technology",
+					"react",
+					"next",
+					"vue",
+					"typescript",
+					"firebase",
+					"node",
+					"redux",
+				],
+			},
+			{
+				group: "ui",
+				keywords: [
+					"ui",
+					"library",
+					"material ui",
+					"ant design",
+					"tailwind",
+					"bootstrap",
+					"scss",
+				],
+			},
+			{
+				group: "features",
+				keywords: [
+					"feature",
+					"dashboard",
+					"table",
+					"form",
+					"chart",
+					"filter",
+				],
+			},
+			{
+				group: "experience",
+				keywords: ["experience", "career", "background"],
+			},
+		];
+
+		// ---------------------------------------------------
 		// AI suggestions
+		// ---------------------------------------------------
 		const completion = await openai.chat.completions.create({
 			model: "gpt-4o-mini",
-			temperature: 0.5,
+			temperature: 0.15,
 			messages: [
 				{
 					role: "system",
 					content: `
-							Generate 3 relevant follow-up questions about Veljko.
+Generate 3 follow-up questions about Veljko.
 
-							Rules:
-							- Based on useful info from the answer
-							- Avoid generic questions
-							- max 8 words
-							- no numbering
-							- plain text
+Previous user questions:
+${recentQuestionsText}
 
-							Good examples:
-							- What technologies does Veljko use?
-							- Which projects did he build?
-							- What is his main focus?
+STRICT RAG RULES:
+- Questions MUST be directly answerable from the provided answer
+- Answers must exist explicitly in the text
+- NEVER infer knowledge
+- NEVER generalize technologies into broader concepts
+- NEVER invent missing details
+- NEVER ask speculative questions
+- NEVER ask opinion questions
+- NEVER ask architecture questions
+- NEVER ask implementation questions
+- NEVER ask performance questions
+- NEVER ask challenge questions
+- NEVER ask preference questions
+- NEVER ask abstract questions
 
-							Bad:
-							- irrelevant or vague questions
-							`,
+IMPORTANT:
+If answer mentions:
+- Ant Design → ask about UI libraries
+- Redux Toolkit → ask about state management tools
+- React → ask about frontend technologies
+
+DO NOT transform technologies into broader concepts.
+
+BAD:
+- What design systems is he familiar with?
+- What architecture does he use?
+- How does he optimize performance?
+- What challenges did he face?
+- How does he maintain the platform?
+
+GOOD:
+- What UI libraries does he use?
+- What state management tools does he use?
+- What projects has he worked on?
+- What frontend technologies does he use?
+
+IMPORTANT:
+Avoid semantically similar questions.
+Avoid repeating previous topics.
+Prefer different topics.
+
+FORMAT:
+- max 8 words
+- plain text
+- no numbering
+`,
 				},
 				{
 					role: "user",
@@ -350,17 +545,79 @@ router.post("/suggestions", async (req, res) => {
 
 		const raw = completion.choices[0].message.content || "";
 
-		// parsing
-		const suggestions = raw
+		// ---------------------------------------------------
+		// parse suggestions
+		// ---------------------------------------------------
+		let suggestions = raw
 			.split("\n")
-			.map((s) => s.replace(/^\d+\.?\s*/, "").trim())
+			.map((s) =>
+				s
+					.replace(/^\d+\.?\s*/, "")
+					.replace(/^- /, "")
+					.trim(),
+			)
 			.filter((s) => s.length > 5)
+
+			// remove exact duplicates
+			.filter(
+				(s, index, arr) =>
+					arr.findIndex(
+						(x) => x.toLowerCase() === s.toLowerCase(),
+					) === index,
+			)
+
+			// semantic-lite duplicate removal
+			.filter((s, index, arr) => {
+				const normalized = s.toLowerCase();
+
+				return !arr.some((other, otherIndex) => {
+					if (index === otherIndex) return false;
+
+					const o = other.toLowerCase();
+
+					return (
+						normalized.includes(o.slice(0, 15)) ||
+						o.includes(normalized.slice(0, 15))
+					);
+				});
+			})
+
+			// remove already used topic groups
+			.filter((s) => {
+				const lower = s.toLowerCase();
+
+				const matchedGroup =
+					questionGroups.find((g) =>
+						g.keywords.some((k) => lower.includes(k)),
+					)?.group || "";
+
+				if (!matchedGroup) return true;
+
+				return !usedTopicGroups.has(matchedGroup);
+			})
+
 			.slice(0, 3);
+
+		// ---------------------------------------------------
+		// final fallback
+		// ---------------------------------------------------
+		if (!suggestions.length) {
+			suggestions = fallbackSuggestions
+				.filter((s) => {
+					return !recentQuestions.some(
+						(q) => q.toLowerCase() === s.toLowerCase(),
+					);
+				})
+				.slice(0, 3);
+		}
 
 		res.json({ suggestions });
 	} catch (err) {
 		console.error("Suggestions error:", err);
-		res.status(500).json({ suggestions: [] });
+
+		res.status(500).json({
+			suggestions: [],
+		});
 	}
 });
 
